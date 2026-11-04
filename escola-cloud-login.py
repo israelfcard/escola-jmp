@@ -144,7 +144,8 @@ opcoes_menu = {
     "📢 Comunicados": "Comunicados",
     "📋 Licenças e Atestados": "Atestados",
     "📁 Pedagógico (Impressões, Provas, Guias)": "Guias_Planos",
-    "📩 Solicitações": "Solicitacoes"
+    "📩 Reuniões e Conselhos": "Reunioes",
+    "📩 Outras Solicitações": "Solicitacoes"
 }
 
 opcao_selecionada = st.sidebar.radio(
@@ -205,6 +206,14 @@ if st.session_state.form_visivel:
                 uploaded_file = st.file_uploader("Envio de Arquivo", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
                 solicitante = docente
                 data_inicio = data_fim = None
+
+            elif tipo_chave == "Reunioes":
+                data = st.text_input("Data")
+                participantes = st.text_input("Fazer checkboxes com professores.")
+                tema = st.text_input("Tema principal")
+                observacao = st.text_area("Observação (Opcional)")
+                uploaded_file = st.file_uploader("Envio de Arquivo", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
+                solicitante = docente
 
             else:
                 solicitante = st.text_input("Solicitante / Comunicante")
