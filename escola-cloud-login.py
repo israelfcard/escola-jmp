@@ -50,7 +50,7 @@ def carregar_dados():
         "Guias_Planos": [],
         "Solicitacoes": [],
         "Comunicados": [],
-        "Reunioes": []
+        "Reunioes": [],
         "usuarios": []
     }
     try:
