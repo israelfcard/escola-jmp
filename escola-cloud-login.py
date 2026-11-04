@@ -210,11 +210,11 @@ if st.session_state.form_visivel:
 
             elif tipo_chave == "Reunioes":
                 data = st.text_input("Data")
-                participantes = st.text_input("Fazer checkboxes com professores.")
+                solicitante = st.text_input("Solicitante")
                 tema = st.text_input("Tema principal")
                 observacao = st.text_area("Observação (Opcional)")
+                participantes = st.text_input("Fazer checkboxes com professores.")
                 uploaded_file = st.file_uploader("Envio de Arquivo", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
-                solicitante = docente
 
             else:
                 solicitante = st.text_input("Solicitante / Comunicante")
