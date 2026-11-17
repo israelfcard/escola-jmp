@@ -1,86 +1,122 @@
 from datetime import datetime
 import os
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore, storage
+from supabase import create_client, Client
 
 # ==========================================
-# CONFIGURAÇÃO INTELIGENTE DO FIREBASE
+# CONFIGURAÇÃO DA INTERFACE & APK WEBVIEW
+# ==========================================
+st.set_page_config(
+    page_title="Comunicação Escolar",
+    page_icon="🏫",
+    layout="wide",
+    initial_sidebar_state="auto"
+)
+
+# CSS otimizado para Android WebView + Espaço reservado para Banner AdMob no rodapé
+st.markdown("""
+    <style>
+    /* Reserva espaço na parte inferior para que o Banner nativo do AdMob no APK não cubra o conteúdo */
+    .main .block-container {
+        padding-bottom: 95px !important;
+    }
+
+    /* Ajustes de usabilidade para telas de smartphones (Android) */
+    @media (max-width: 768px) {
+        .stButton button {
+            width: 100%;
+            min-height: 44px; /* Tamanho mínimo ideal para toque */
+        }
+        .stColumns {
+            flex-direction: column;
+        }
+    }
+
+    /* Estilização limpa do bloco de anúncio interno */
+    .ad-container {
+        margin-top: 20px;
+        margin-bottom: 15px;
+        padding: 10px;
+        border: 1px dashed #d0d7de;
+        border-radius: 8px;
+        background-color: #f6f8fa;
+        text-align: center;
+    }
+    .ad-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        color: #57606a;
+        letter-spacing: 1px;
+        margin-bottom: 6px;
+        display: block;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# CONFIGURAÇÃO DO SUPABASE
 # ==========================================
 @st.cache_resource
-def inicializar_firebase():
-    if not firebase_admin._apps:
-        try:
-            arquivo_json = "serviceAccountKey.json"
-            if os.path.exists(arquivo_json):
-                cred = credentials.Certificate(arquivo_json)
-            else:
-                cred_dict = dict(st.secrets["firebase"])
-                if "private_key" in cred_dict:
-                    pk = cred_dict["private_key"].strip()
-                    if "\\n" in pk:
-                        pk = pk.replace("\\n", "\n")
-                    cred_dict["private_key"] = pk
-                cred = credentials.Certificate(cred_dict)
-
-            # ATENÇÃO: Substitua pelo seu Storage Bucket real, ex: 'projeto.firebasestorage.app' ou '.appspot.com'
-            app = firebase_admin.initialize_app(cred, {
-                'storageBucket': 'seu-projeto.appspot.com' 
-            })
-            return app
-        except Exception as e:
-            st.error(f"Erro crítico ao inicializar o Firebase: {e}")
+def inicializar_supabase() -> Client | None:
+    try:
+        url = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY")
+        if not url or not key:
+            st.error("⚠️ Credenciais do Supabase não encontradas nos segredos do sistema.")
             return None
-    else:
-        return firebase_admin.get_app()
+        return create_client(url, key)
+    except Exception as e:
+        st.error(f"Erro crítico ao inicializar o cliente Supabase: {e}")
+        return None
 
-app_firebase = inicializar_firebase()
+supabase = inicializar_supabase()
 
-if app_firebase:
-    db = firestore.client()
-else:
+if not supabase:
     st.stop()
 
+BUCKET_NAME = "uploads"
+TABELA_SISTEMA = "sistema_escolar"
+DOC_ID = "dados_gerais"
+
 # ==========================================
-# FUNÇÕES DE BANCO DE DADOS (FIRESTORE)
+# FUNÇÕES DE BANCO DE DADOS (SUPABASE)
 # ==========================================
-def carregar_dados():
+def carregar_dados() -> dict:
     estrutura_padrao = {
         "Atestados": [],
         "Guias_Planos": [],
         "Solicitacoes": [],
         "Comunicados": [],
-        "Reunioes": [],
+        "Reunioes_Conselhos": [],
         "usuarios": []
     }
     try:
-        doc_ref = db.collection("sistema_escolar").document("dados_gerais")
-        doc = doc_ref.get()
-        if doc.exists:
-            dados = doc.to_dict()
+        resposta = supabase.table(TABELA_SISTEMA).select("dados").eq("id", DOC_ID).execute()
+        if resposta.data and len(resposta.data) > 0:
+            dados = resposta.data[0].get("dados", {})
+            # Garante integridade de chaves caso o schema seja atualizado
             for chave in estrutura_padrao:
                 if chave not in dados:
                     dados[chave] = []
             return dados
         else:
-            doc_ref.set(estrutura_padrao)
+            supabase.table(TABELA_SISTEMA).insert({"id": DOC_ID, "dados": estrutura_padrao}).execute()
             return estrutura_padrao
     except Exception as e:
-        st.error(f"Erro ao carregar dados do Firebase: {e}")
+        st.error(f"Erro ao carregar dados do Supabase: {e}")
         return estrutura_padrao
 
-def salvar_dados(dados):
+def salvar_dados(dados: dict):
     try:
-        doc_ref = db.collection("sistema_escolar").document("dados_gerais")
-        doc_ref.set(dados)
+        supabase.table(TABELA_SISTEMA).upsert({"id": DOC_ID, "dados": dados}).execute()
     except Exception as e:
-        st.error(f"Erro ao salvar dados no Firebase: {e}")
+        st.error(f"Erro ao salvar dados no Supabase: {e}")
 
-def verificar_credenciais(login_informado, senha_informada, dados_sistema):
+def verificar_credenciais(login_informado, senha_informada, dados_sistema) -> bool:
     try:
         lista_usuarios = dados_sistema.get("usuarios", [])
         if not lista_usuarios:
-            st.warning("⚠️ Nenhum utilizador encontrado na lista de dados gerais.")
+            st.warning("⚠️ Nenhum utilizador cadastrado no sistema.")
             return False
             
         login_limpo = str(login_informado).strip()
@@ -98,19 +134,22 @@ def verificar_credenciais(login_informado, senha_informada, dados_sistema):
         st.error(f"Erro ao validar credenciais: {e}")
         return False
 
-# ==========================================
-# CONFIGURAÇÃO DA INTERFACE (STREAMLIT)
-# ==========================================
-st.set_page_config(
-    page_title="Comunicação Escolar",
-    page_icon="🏫",
-    layout="centered"
-)
+def renderizar_bloco_anuncio():
+    """Renderiza um bloco de publicidade seguro para WebView e aderente às políticas."""
+    st.markdown("""
+        <div class="ad-container">
+            <span class="ad-label">Publicidade</span>
+            <a href="https://seu-link-patrocinador.com" target="_blank" style="text-decoration: none; color: #24292f;">
+                <div style="font-size: 13px; font-weight: bold;">📚 Soluções Educacionais & Parcerias</div>
+                <div style="font-size: 11px; color: #57606a;">Toque para conhecer materiais e conteúdos pedagógicos.</div>
+            </a>
+        </div>
+    """, unsafe_allow_html=True)
 
-# Carrega os dados gerais do sistema logo no início (incluindo utilizadores)
+# Carregamento inicial dos dados globais
 dados = carregar_dados()
 
-# Inicializa o estado de autenticação
+# Inicialização de sessão
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
@@ -119,12 +158,11 @@ if "autenticado" not in st.session_state:
 # ==========================================
 if not st.session_state.autenticado:
     st.title("🏫 Comunicação Escolar")
-    #st.markdown("Por favor, faça login para aceder ao sistema.")
     
     with st.form("form_login"):
         login_input = st.text_input("Login")
         senha_input = st.text_input("Senha", type="password")
-        submit_login = st.form_submit_button("Entrar")
+        submit_login = st.form_submit_button("Entrar", use_container_width=True)
         
         if submit_login:
             if verificar_credenciais(login_input, senha_input, dados):
@@ -139,14 +177,12 @@ if not st.session_state.autenticado:
 # ==========================================
 # APLICATIVO PRINCIPAL (APÓS LOGIN)
 # ==========================================
-#st.title("🏫 Comunicação Escolar")
-
 opcoes_menu = {
     "📢 Comunicados": "Comunicados",
     "📋 Licenças e Atestados": "Atestados",
     "📁 Pedagógico (Impressões, Provas, Guias)": "Guias_Planos",
-    "📩 Reuniões e Conselhos": "Reunioes",
-    "📩 Outras Solicitações": "Solicitacoes"
+    "📅 Reuniões e Conselhos": "Reunioes_Conselhos",
+    "📩 Solicitações": "Solicitacoes"
 }
 
 opcao_selecionada = st.sidebar.radio(
@@ -160,13 +196,17 @@ if st.sidebar.button("🔒 Sair do Sistema", use_container_width=True):
     st.session_state.autenticado = False
     st.rerun()
 
+# Bloco de anúncio lateral discreto
+with st.sidebar:
+    renderizar_bloco_anuncio()
+
 tipo_chave = opcoes_menu[opcao_selecionada]
-itens = dados[tipo_chave]
+itens = dados.get(tipo_chave, [])
 
 # ==========================================
-# CABEÇALHO E BOTÃO DE CADASTRO LADO A LADO
+# CABEÇALHO E BOTÃO DE CADASTRO
 # ==========================================
-col_titulo, col_botao = st.columns([3, 1])
+col_titulo, col_botao = st.columns([2.5, 1.5])
 
 with col_titulo:
     st.header(f"{opcao_selecionada}")
@@ -188,6 +228,9 @@ if st.session_state.form_visivel:
     with st.container(border=True):
         with st.form(key=f"form_{tipo_chave}", clear_on_submit=True):
 
+            data_inicio = data_fim = componente = docente = bimestre_ano = solicitante = observacao = None
+            uploaded_file = None
+
             if tipo_chave == "Atestados":
                 col1, col2 = st.columns(2)
                 with col1:
@@ -196,7 +239,6 @@ if st.session_state.form_visivel:
                     data_fim = st.text_input("Data Fim (DD/MM/AAAA)", value=datetime.today().strftime("%d/%m/%Y"))
                 solicitante = st.text_input("Solicitante")
                 observacao = st.text_area("Observação")
-                componente = docente = bimestre_ano = None
                 uploaded_file = st.file_uploader("Envio de Arquivo (Opcional)", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
 
             elif tipo_chave == "Guias_Planos":
@@ -206,50 +248,50 @@ if st.session_state.form_visivel:
                 observacao = st.text_area("Observação (Opcional)")
                 uploaded_file = st.file_uploader("Envio de Arquivo", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
                 solicitante = docente
-                data_inicio = data_fim = None
 
-            elif tipo_chave == "Reunioes":
-                data = st.text_input("Data")
-                solicitante = st.text_input("Solicitante")
-                tema = st.text_input("Tema principal")
-                observacao = st.text_area("Observação (Opcional)")
-                participantes = st.text_input("Fazer checkboxes com professores.")
-                uploaded_file = st.file_uploader("Envio de Arquivo", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
+            elif tipo_chave == "Reunioes_Conselhos":
+                solicitante = st.text_input("Responsável / Organizador")
+                data_inicio = st.text_input("Data da Reunião (DD/MM/AAAA)", value=datetime.today().strftime("%d/%m/%Y"))
+                observacao = st.text_area("Pauta / Ata / Observações")
+                uploaded_file = st.file_uploader("Documento Anexo (Ata/Pauta - Opcional)", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
 
-            else:
+            else: # Comunicados e Solicitações
                 solicitante = st.text_input("Solicitante / Comunicante")
                 observacao = st.text_area("Observação")
                 uploaded_file = st.file_uploader("Envio de Arquivo (Opcional)", type=["pdf", "doc", "docx", "png", "jpg", "jpeg"])
-                data_inicio = data_fim = componente = docente = bimestre_ano = None
 
-            submit_button = st.form_submit_button(label="Salvar Registro")
+            submit_button = st.form_submit_button(label="Salvar Registro", use_container_width=True)
 
             if submit_button:
-                if solicitante:
-                    url_arquivo_firebase = None
+                if solicitante and str(solicitante).strip() != "":
+                    url_arquivo_supabase = None
 
                     if uploaded_file is not None:
                         try:
-                            bucket = storage.bucket()
-                            nome_blob = f"uploads/{datetime.now().strftime('%Y%m%d%H%M%S')}_{uploaded_file.name}"
-                            blob = bucket.blob(nome_blob)
-                            blob.upload_from_file(uploaded_file, content_type=uploaded_file.type)
-                            blob.make_public()
-                            url_arquivo_firebase = blob.public_url
+                            caminho_arquivo = f"registros/{datetime.now().strftime('%Y%m%d%H%M%S')}_{uploaded_file.name}"
+                            bytes_arquivo = uploaded_file.getvalue()
+                            
+                            supabase.storage.from_(BUCKET_NAME).upload(
+                                path=caminho_arquivo,
+                                file=bytes_arquivo,
+                                file_options={"content-type": uploaded_file.type}
+                            )
+                            url_resp = supabase.storage.from_(BUCKET_NAME).get_public_url(caminho_arquivo)
+                            url_arquivo_supabase = url_resp
                         except Exception as e:
-                            st.error(f"Erro ao enviar arquivo para o Firebase Storage: {e}")
+                            st.error(f"Erro ao enviar arquivo para o Supabase Storage: {e}")
 
                     registro = {
                         "id": datetime.now().strftime("%Y%m%d%H%M%S"),
                         "data_registro": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                        "solicitante": solicitante,
-                        "observacao": observacao,
+                        "solicitante": str(solicitante).strip(),
+                        "observacao": str(observacao).strip() if observacao else "",
                         "data_inicio": data_inicio,
                         "data_fim": data_fim,
                         "componente": componente,
                         "docente": docente,
                         "bimestre_ano": bimestre_ano,
-                        "arquivo_url": url_arquivo_firebase
+                        "arquivo_url": url_arquivo_supabase
                     }
 
                     dados[tipo_chave].append(registro)
@@ -268,33 +310,43 @@ st.markdown("---")
 if not itens:
     st.info(f"Nenhum registro encontrado em '{opcao_selecionada}'.")
 else:
-    for item in reversed(itens):
+    for idx, item in enumerate(reversed(itens)):
         with st.container():
-            # Exibe apenas o nome e a data (ID ocultado)
-            st.markdown(f"**👤 {item['solicitante']}** — *Cadastrado em: {item['data_registro']}*")
+            solicitante_nome = item.get('solicitante', 'Desconhecido')
+            data_reg = item.get('data_registro', 'Data não informada')
+            st.markdown(f"**👤 {solicitante_nome}** — *Cadastrado em: {data_reg}*")
 
             if tipo_chave == "Atestados":
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    st.write(f"📅 **Início:** {item.get('data_inicio')}")
+                    st.write(f"📅 **Início:** {item.get('data_inicio', '-')}")
                 with col_b:
-                    st.write(f"📅 **Fim:** {item.get('data_fim')}")
+                    st.write(f"📅 **Fim:** {item.get('data_fim', '-')}")
                 if item.get('observacao'):
                     st.write(f"💬 **Observação:** {item.get('observacao')}")
 
             elif tipo_chave == "Guias_Planos":
-                st.write(f"📚 **Componente:** {item.get('componente')}")
-                st.write(f"👨‍🏫 **Docente:** {item.get('docente')}")
-                st.write(f"📆 **Bimestre/Ano:** {item.get('bimestre_ano')}")
+                st.write(f"📚 **Componente:** {item.get('componente', '-')}")
+                st.write(f"👨‍🏫 **Docente:** {item.get('docente', '-')}")
+                st.write(f"📆 **Bimestre/Ano:** {item.get('bimestre_ano', '-')}")
                 if item.get('observacao'):
                     st.write(f"💬 **Observação:** {item.get('observacao')}")
+
+            elif tipo_chave == "Reunioes_Conselhos":
+                if item.get('data_inicio'):
+                    st.write(f"📅 **Data da Reunião:** {item.get('data_inicio')}")
+                if item.get('observacao'):
+                    st.write(f"💬 **Pauta/Ata:** {item.get('observacao')}")
 
             else:
                 if item.get('observacao'):
                     st.write(f"💬 **Observação:** {item.get('observacao')}")
 
-            # Exibe o link do arquivo apenas se houver arquivo anexado (caso contrário, não mostra nada)
             if item.get("arquivo_url"):
                 st.markdown(f"📥 **Arquivo Anexado:** [Baixar Arquivo]({item.get('arquivo_url')})")
 
             st.markdown("---")
+
+        # Insere um bloco de anúncio intercalado a cada 5 registros na listagem
+        if (idx + 1) % 5 == 0:
+            renderizar_bloco_anuncio()
